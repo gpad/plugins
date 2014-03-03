@@ -46,6 +46,8 @@
 #include "logic/state-machines/viewmachine.h"
 #include "logic/state-machines/deadkeymachine.h"
 
+#include <QDebug>
+
 namespace MaliitKeyboard {
 namespace {
 
@@ -360,6 +362,7 @@ void LayoutUpdater::setStyle(const SharedStyle &style)
 void LayoutUpdater::onKeyPressed(const Key &key,
                                  const SharedLayout &layout)
 {
+    qDebug() << "LayoutUpdater::onKeyPressed";
     Q_D(LayoutUpdater);
 
     if (d->layout != layout) {
@@ -395,6 +398,8 @@ void LayoutUpdater::onKeyLongPressed(const Key &key,
 {
     Q_UNUSED(key);
     Q_D(LayoutUpdater);
+
+    qDebug() << "LayoutUpdater::onKeyLongPressed";
 
     if (d->layout != layout || d->layout.isNull() || d->style.isNull()) {
         return;
@@ -434,6 +439,8 @@ void LayoutUpdater::onKeyReleased(const Key &key,
                                   const SharedLayout &layout)
 {
     Q_D(const LayoutUpdater);
+
+    qDebug() << "LayoutUpdater::onKeyReleased";
 
     if (d->layout != layout) {
         return;

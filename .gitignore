@@ -18,3 +18,7 @@ core
 *.tar.*
 *.md5
 *.moc
+backup-*-pre-maliit-plugins.tgz
+description-pak
+doc-pak/
+maliit-plugins_0.94-qt4-1_i386.deb

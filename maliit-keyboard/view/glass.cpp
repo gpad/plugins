@@ -73,6 +73,7 @@ public:
     bool gesture_triggered;
     QTimer long_press_timer;
     SharedLayout long_press_layout;
+    bool mouse_captured;
 
     explicit GlassPrivate()
         : window(0)
@@ -88,6 +89,7 @@ public:
         , gesture_triggered(false)
         , long_press_timer()
         , long_press_layout()
+        , mouse_captured(false)
     {
         long_press_timer.setInterval(300);
         long_press_timer.setSingleShot(true);
@@ -155,6 +157,32 @@ void Glass::clearLayouts()
     d->layouts.clear();
 }
 
+
+QPoint translatePosition(const QPoint &pt, const QPoint &offset)
+{
+    return QPoint(pt.x() - offset.x(), pt.y() - offset.y());
+}
+
+QString describe(QEvent::Type type)
+{
+    switch(type)
+    {
+        case QEvent::Hide: return "QEvent::Hide";
+        case QEvent::PaletteChange: return "QEvent::PaletteChange";
+        case QEvent::DynamicPropertyChange: return "QEvent::DynamicPropertyChange";
+        case QEvent::StyleChange: return "QEvent::StyleChange";
+        case QEvent::Show: return "QEvent::Show";
+        case QEvent::ToolTip: return "QEvent::ToolTip";
+        case QEvent::MouseMove: return "QEvent::MouseMove";
+        case QEvent::MouseButtonPress: return "QEvent::MouseButtonPress";
+        case QEvent::MouseButtonRelease: return "QEvent::MouseButtonRelease";
+        case QEvent::Enter: return "QEvent::Enter";
+        case QEvent::Leave: return "QEvent::Leave";
+        default:
+            return QString("%1").arg(type);
+    }
+}
+
 bool Glass::eventFilter(QObject *obj,
                         QEvent *ev)
 {
@@ -167,6 +195,8 @@ bool Glass::eventFilter(QObject *obj,
 
     const QSharedPointer<Maliit::Plugins::AbstractGraphicsViewSurface> &eventSurface(obj == d->extendedWindow ? d->extendedSurface : d->surface);
 
+    if (ev->type() != QEvent::Paint)
+        qDebug() << "Glass::eventFilter " << describe(ev->type());
     switch(ev->type()) {
     case QEvent::Paint: {
         if (measure_fps) {
@@ -185,12 +215,24 @@ bool Glass::eventFilter(QObject *obj,
     } break;
 
     case QKeyEvent::MouseButtonPress:
+        if (!d->mouse_captured)
+        {
+            qDebug() << "CAPTURE mouse";
+            d->window->grabMouse();
+            d->mouse_captured = true;
+        }
         d->gesture_timer.restart();
         d->gesture_triggered = false;
 
         return handlePressReleaseEvent(ev, eventSurface);
 
     case QKeyEvent::MouseButtonRelease:
+        if (d->mouse_captured)
+        {
+            qDebug() << "RELEASE mouse";
+            d->window->releaseMouse();
+            d->mouse_captured = false;
+        }
         d->long_press_timer.stop();
 
         if (d->gesture_triggered) {
@@ -201,6 +243,7 @@ bool Glass::eventFilter(QObject *obj,
 
     case QKeyEvent::MouseMove: {
         if (d->gesture_triggered) {
+            qDebug() << "MouseMove -> exit for gesture_triggered";
             return false;
         }
 
@@ -210,28 +253,47 @@ bool Glass::eventFilter(QObject *obj,
         Q_FOREACH (const SharedLayout &layout, d->layouts) {
             const QSharedPointer<Maliit::Plugins::AbstractGraphicsViewSurface> targetSurface(layout->activePanel() == Layout::ExtendedPanel ? d->extendedSurface : d->surface);
 
-            const QPoint &pos(targetSurface->translateEventPosition(qme->pos(), eventSurface));
-            const QPoint &last_pos(targetSurface->translateEventPosition(d->last_pos, eventSurface));
-            d->last_pos = qme->pos();
+            QPoint pos(targetSurface->translateEventPosition(qme->pos(), eventSurface));
+            QPoint last_pos(targetSurface->translateEventPosition(d->last_pos, eventSurface));
 
-            const QPoint &press_pos(targetSurface->translateEventPosition(d->press_pos, eventSurface));
+            QPoint press_pos(targetSurface->translateEventPosition(d->press_pos, eventSurface));
 
             const QRect &rect(layout->activeKeyAreaGeometry());
+
+            if (layout->activePanel() == Layout::ExtendedPanel)
+            {
+                qDebug() << "MouseMove --> translate position from "
+                << "offset: " << layout->extendedPanelOffset()
+                << "pos: " << qme->pos()
+                << "last_pos: " << d->last_pos
+                << "press_pos: " << d->press_pos;
+                pos = translatePosition(qme->pos(), layout->extendedPanelOffset());
+                last_pos = d->last_pos;
+                press_pos = d->press_pos;
+                qDebug() << "MouseMove --> translate position to "
+                << "pos: " << pos
+                << "last_pos: " << last_pos
+                << "press_pos: " << press_pos;
+            }
+            d->last_pos = qme->pos();
 
             if (d->gesture_timer.elapsed() < 250) {
                 if (pos.y() > (press_pos.y() - rect.height() * 0.33)
                     && pos.y() < (press_pos.y() + rect.height() * 0.33)) {
                     if (pos.x() < (press_pos.x() - rect.width() * 0.33)) {
                         d->gesture_triggered = true;
+                        qDebug() << "MouseMove -> switchRight";
                         Q_EMIT switchRight(layout);
                     } else if (pos.x() > (press_pos.x() + rect.width() * 0.33)) {
                         d->gesture_triggered = true;
+                        qDebug() << "MouseMove -> switchLeft";
                         Q_EMIT switchLeft(layout);
                     }
                 } else if (pos.x() > (press_pos.x() - rect.width() * 0.33)
                            && pos.x() < (press_pos.x() + rect.width() * 0.33)) {
                     if (pos.y() > (press_pos.y() + rect.height() * 0.50)) {
                         d->gesture_triggered = true;
+                        qDebug() << "MouseMove -> keyboardClosed pos: " << pos << " press_pos: " << press_pos << " rect: " << rect;
                         Q_EMIT keyboardClosed();
                     }
                 }
@@ -239,6 +301,7 @@ bool Glass::eventFilter(QObject *obj,
 
             if (d->gesture_triggered) {
                 Q_FOREACH (const Key &k, d->active_keys) {
+                    qDebug() << "MouseMove -> keyExited: " << pos << "rect: " << rect;
                     Q_EMIT keyExited(k, layout);
                 }
 
@@ -287,6 +350,13 @@ bool Glass::eventFilter(QObject *obj,
 void Glass::onLongPressTriggered()
 {
     Q_D(Glass);
+    qDebug() << "Glass::onLongPressTriggered";
+    if (d->mouse_captured)
+    {
+        qDebug() << "RELEASE Mouse";
+        d->window->releaseMouse();
+        d->mouse_captured = false;
+    }
 
     if (d->gesture_triggered || d->active_keys.isEmpty()
         || d->long_press_layout.isNull()
@@ -302,8 +372,47 @@ void Glass::onLongPressTriggered()
     d->active_keys.clear();
 }
 
+QDebug& operator<<(QDebug &xxx,  MaliitKeyboard::Label label)
+{
+    xxx << "---LABEL ---"  << "\n"
+        << "text:" << label.text() << "\n"
+        << "rect:" << label.rect() << "\n"
+        << "------------" << "\n";
+        //TODO font
+    return xxx;
+}
+
+QDebug& operator<<(QDebug &xxx, MaliitKeyboard::Area area)
+{
+    xxx << "Area size:" << area.size() << "\n";
+    return xxx;
+}
+
+QDebug& operator<<(QDebug &xxx, MaliitKeyboard::Key key)
+{
+    xxx << "--- KEY ---" << "\n"
+        << "valid:" << key.valid() << "\n"
+        << "rect:" << key.rect() << "\n"
+        << "origin:" << key.origin() << "\n"
+        << "area:" << key.area() << "\n"
+        << "label:" << key.label() << "\n"
+        << "action:" << key.action() << "\n"
+        << "margins:" << key.margins() << "\n"
+        << "hasExtendedKeys:" << key.hasExtendedKeys() << "\n"
+        << "-----------"  << "\n";
+    return xxx;
+}
+
+QDebug& operator<<(QDebug &xxx,  MaliitKeyboard::Layout layout)
+{
+    xxx << "--- LAYOUT ---" << "\n"
+        << "--------------" << "\n";
+    return xxx;
+}
+
 bool Glass::handlePressReleaseEvent(QEvent *ev, const QSharedPointer<Maliit::Plugins::AbstractGraphicsViewSurface> &eventSurface)
 {
+    qDebug() << "Glass::handlePressReleaseEvent";
     if (not ev) {
         return false;
     }
@@ -319,10 +428,13 @@ bool Glass::handlePressReleaseEvent(QEvent *ev, const QSharedPointer<Maliit::Plu
     Q_FOREACH (const SharedLayout &layout, d->layouts) {
         const QSharedPointer<Maliit::Plugins::AbstractGraphicsViewSurface> targetSurface(layout->activePanel() == Layout::ExtendedPanel ? d->extendedSurface : d->surface);
 
-        const QPoint &pos(targetSurface->translateEventPosition(qme->pos(), eventSurface));
+        // const QPoint &pos(targetSurface->translateEventPosition(qme->pos(), eventSurface));
+        QPoint pos(targetSurface->translateEventPosition(qme->pos(), eventSurface));
 
         switch (qme->type()) {
         case QKeyEvent::MouseButtonPress: {
+            qDebug() << "[Glass::handlePressReleaseEvent] QKeyEvent::MouseButtonPress";
+
             const Key &key(Logic::keyHit(layout->activeKeyArea().keys(),
                                          layout->activeKeyAreaGeometry(),
                                          pos, d->active_keys));
@@ -352,9 +464,38 @@ bool Glass::handlePressReleaseEvent(QEvent *ev, const QSharedPointer<Maliit::Plu
         } break;
 
         case QKeyEvent::MouseButtonRelease: {
+            if (layout->activePanel() == Layout::ExtendedPanel)
+            {
+                // pos = QPoint(
+                //     qme->pos().x() - layout->extendedPanelOffset().x(),
+                //     qme->pos().y() - layout->extendedPanelOffset().y()
+                //     );
+                pos = translatePosition(qme->pos(), layout->extendedPanelOffset());
+                qDebug() << "translating from " << qme->pos() << " to " << pos;
+            }
             const Key &key(Logic::keyHit(layout->activeKeyArea().keys(),
                                          layout->activeKeyAreaGeometry(),
                                          pos, d->active_keys, Logic::AcceptIfInFilter));
+
+            QString prefix = "[Glass::handlePressReleaseEvent] QKeyEvent::MouseButtonRelease ";
+            // qDebug() << prefix;
+            qDebug() 
+            // << prefix << "keys:" << layout->activeKeyArea().keys() << "\n"
+            // << prefix << "area:" << layout->activeKeyAreaGeometry() << "\n"
+            << prefix << "pos:" << pos << "\n";
+            // << prefix << "activepanel:" << layout->activePanel() << "\n"
+            // << prefix << "layout->extendedPanelOffset" << layout->extendedPanelOffset() << "\n"
+            // << prefix << "layout->activePanel() == Layout::ExtendedPanel" << (layout->activePanel() == Layout::ExtendedPanel) << "\n"
+            // << prefix << "d->pos(): " << d->window->pos() << "\n"
+            // << prefix << "other translate" << d->surface->translateEventPosition(qme->pos(), eventSurface) << "\n"
+            // << prefix << "other translate es1" << targetSurface->translateEventPosition(qme->pos(), d->extendedSurface) << "\n"
+            // << prefix << "other translate es1" << targetSurface->translateEventPosition(qme->pos(), d->surface) << "\n"
+
+            // << prefix << "qme->pos(): " << qme->pos() << "\n"
+            // << prefix << "eventSourface: " << eventSurface << "\n"
+            // << prefix << "active_keys" << d->active_keys << "\n"
+            // << prefix << "result -> key.valid:" << key.valid() << "\n"
+            // << prefix << "result -> key.label.text:" << key.label().text() << "\n";
 
             if (key.valid()) {
                 removeActiveKey(&d->active_keys, key);
