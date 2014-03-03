@@ -1,0 +1,5 @@
+How to install maliit framework:
+checkinstall --pkgname maliit-framework --pkgversion "0.94-qt4" make install
+
+How to install maliit plugin:
+checkinstall --pkgname maliit-plugins --pkgversion "0.94-qt4" --exclude /usr/share/maliit/plugins/org/maliit/styles/nokia-n9/ make install
